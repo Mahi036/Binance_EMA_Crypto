@@ -4,38 +4,45 @@ on:
   push:
     branches: [ main ]
   schedule:
-    - cron: '0 0 * * *'
-  workflow_dispatch:
+    - cron: '0 0 * * *'    # every UTC midnight
+  workflow_dispatch:      # enables manual “Run workflow” button
 
 jobs:
   update_csvs:
     runs-on: ubuntu-latest
 
     steps:
+      # 1) Check out your repo
       - name: Check out repo
         uses: actions/checkout@v3
 
+      # 2) Install Go (to build the proxy)
       - name: Set up Go
         uses: actions/setup-go@v4
         with:
           go-version: '1.24'
 
+      # 3) Clone & build binance-proxy
       - name: Build binance-proxy
         run: |
           git clone https://github.com/nightshift2k/binance-proxy.git
           cd binance-proxy/cmd/binance-proxy
           go build -o $GITHUB_WORKSPACE/binance-proxy
 
+      # 4) Launch the proxy in the background
       - name: Start binance-proxy
         run: |
           nohup $GITHUB_WORKSPACE/binance-proxy &
+          # wait a few seconds for it to bind on :8090
           sleep 5
 
+      # 5) **Really** check the proxy is listening on 127.0.0.1:8090
       - name: Check proxy is up
         run: |
           curl --fail http://127.0.0.1:8090/api/v3/exchangeInfo \
             || (echo "🚨 Binance-proxy didn't start!" && exit 1)
 
+      # 6) Install Node.js & your scripts' deps
       - name: Set up Node.js
         uses: actions/setup-node@v3
         with:
@@ -44,18 +51,20 @@ jobs:
       - name: Install dependencies
         run: npm ci --omit=dev
 
+      # 7) Run your 3 data-gen scripts
       - name: Run breadth & HH-LL scripts
         run: |
           node pct_index.js
           node hh_llindex.js
           node final_index.js
 
+      # 8) Commit & push the updated CSVs back to data/
       - name: Commit & push updated CSVs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "actions@github.com"
           git add data/*.csv
           git commit -m "📈 Update breadth & HH-LL CSVs $(date -u +'%Y-%m-%d')"
           git push
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
