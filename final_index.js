@@ -1,133 +1,107 @@
 /**
- * final_index.js   –  Five-year EMA-breadth + per-symbol EMA dump
- * ---------------------------------------------------------------
- * Output:
- *   • ema_breadth.csv   (daily breadth %)
- *   • ema_values.csv    (symbol-date close, EMA-100, EMA-200, signal)
+ * final_index.js  (ema_breadth_full + per-symbol dump)
+ * ----------------------------------------------------
+ * Five-year EMA-breadth + per-symbol EMA-50/EMA-200.
+ * Outputs “data/ema_breadth.csv” & “data/ema_values.csv”.
  */
 
-// ── 1) Kill any HTTP_PROXY env so axios goes direct ────────────
 process.env.HTTP_PROXY  = '';
 process.env.HTTPS_PROXY = '';
 process.env.http_proxy  = '';
 process.env.https_proxy = '';
 process.env.NO_PROXY    = 'localhost,127.0.0.1';
 
-const axios         = require('axios');
-axios.defaults.proxy = false;                   // disable axios proxy
-// const pLimit        = require('p-limit').default;
-const dayjs         = require('dayjs');
-const { EMA }       = require('technicalindicators');
+const http   = require('http');
+const { URLSearchParams } = require('url');
+const dayjs  = require('dayjs');
+const { EMA } = require('technicalindicators');
 const { createObjectCsvWriter } = require('csv-writer');
 
-// ------------------------------------------------------------------
-// Settings
-// ------------------------------------------------------------------
-const BASE_URL = 'http://127.0.0.1:8090';
-console.log("→ Using BASE_URL =", BASE_URL);
+const HOST        = '127.0.0.1';
+const PORT        = 8090;
+const INTERVAL    = '1d';
+const START_DATE  = '2019-01-01';  // five years back from 2024
+const QUOTE       = 'USDT';
+const CONCURRENCY = 3;
+const LIMIT_ROWS  = 1000;
 
-const QUOTE_FILTER  = 'USDT';
-const INTERVAL      = '1d';
-const START_DATE    = '2019-06-01';   // five years before today, adjust as needed
-const START_MS      = Date.parse(`${START_DATE}T00:00:00Z`);
-const CONCURRENCY   = 3;              // bump if you have extra headroom
-const LIMIT_PER_CALL= 1000;           // the proxy cache serves up to 1000
-
-// ------------------------------------------------------------------
-// Helpers
-// ------------------------------------------------------------------
-
-/**
- * Fetch up to LIMIT_PER_CALL daily klines for a symbol, via your local proxy.
- * No startTime/endTime params → the proxy will serve from its websocket cache.
- * Then filter out any bars before START_DATE.
- *
- * Returns raw array of [openTime, open, high, low, close, ...] elements.
- */
-async function fetchKlines(symbol) {
-  const resp = await axios.get(`${BASE_URL}/api/v3/klines`, {
-    params: { symbol, interval: INTERVAL, limit: LIMIT_PER_CALL }
+function httpGetJson(path) {
+  return new Promise((resolve, reject) => {
+    const opts = { hostname: HOST, port: PORT, path, method: 'GET' };
+    const req  = http.request(opts, res => {
+      let buf = '';
+      res.on('data', ch => buf += ch);
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) {
+          try { resolve(JSON.parse(buf)); }
+          catch(err) { reject(err); }
+        } else {
+          reject(new Error(`HTTP ${res.statusCode} → ${path}`));
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
   });
-  // proxy will return up to 1000 of the most recent bars:
-  return resp.data.filter(bar => bar[0] >= START_MS);
 }
 
-/**
- * Left-pad an EMA series so it aligns with the full closes length.
- */
-function padEMA(arr, period, fullLen) {
-  const pad = Array(period - 1).fill(null);
-  return pad.concat(arr);
+async function fetchDailyKlines(symbol) {
+  const qs = new URLSearchParams({
+    symbol,
+    interval: INTERVAL,
+    limit:    String(LIMIT_ROWS),
+  }).toString();
+  const data = await httpGetJson(`/api/v3/klines?${qs}`);
+  const cutoff = Date.parse(`${START_DATE}T00:00:00Z`);
+  return data
+    .map(k => ({ time: k[0], close: +k[4] }))
+    .filter(bar => bar.time >= cutoff);
 }
 
-// ------------------------------------------------------------------
-// Main
-// ------------------------------------------------------------------
+const padEMA = (arr, period) => Array(period - 1).fill(null).concat(arr);
+
 ;(async () => {
-  console.time('TOTAL');
-
+  console.time('TOTAL-FINAL');
   const { default: pLimit } = await import('p-limit');
+  const limit = pLimit(CONCURRENCY);
 
-  // 1) Build your universe of symbols
-  const exInfoResp = await axios.get(`${BASE_URL}/api/v3/exchangeInfo`);
-  if (!Array.isArray(data)) {
-    console.warn(`⚠️  ${symbol}: unexpected proxy response, skipping`, data);
-    return [];  // or however you bail in this function
-  }
-  const symbols = exInfoResp.data.symbols
-    .filter(s => s.status === 'TRADING'
+  const ex = await httpGetJson('/api/v3/exchangeInfo');
+  const symbols = ex.symbols
+    .filter(s => s.status==='TRADING'
               && s.isSpotTradingAllowed
-              && s.quoteAsset === QUOTE_FILTER)
+              && s.quoteAsset===QUOTE)
     .map(s => s.symbol);
 
-  console.log(`📜  ${symbols.length} ${QUOTE_FILTER}-quoted spot pairs`);
+  const breadth = {};
+  const rowsSym = [];
 
-  // 2) Prepare data containers
-  const breadth      = {};   // { date: { pos: #, neg: # } }
-  const perSymbolRows= [];   // for ema_values.csv
-  const limiter      = pLimit(CONCURRENCY);
-
-  // 3) Fetch & compute for each symbol in parallel
   await Promise.all(symbols.map(sym =>
-    limiter(async () => {
+    limit(async () => {
       try {
-        const kl = await fetchKlines(sym);
-        if (kl.length < 200) return;  // need 200 for EMA-200
+        const kl = await fetchDailyKlines(sym);
+        if (kl.length < 200) return;
 
-        // extract closes & dates
-        const closes = kl.map(k => +k[4]);
-        const dates  = kl.map(k => dayjs(k[0]).format('YYYY-MM-DD'));
+        const closes = kl.map(x => x.close);
+        const dates  = kl.map(x => dayjs(x.time).format('YYYY-MM-DD'));
 
-        // compute EMAs
-        const ema100Short = EMA.calculate({ period: 100,  values: closes });
-        const ema200Short = EMA.calculate({ period: 200, values: closes });
-        const ema100      = padEMA(ema100Short, 100, closes.length);
-        const ema200      = padEMA(ema200Short, 200, closes.length);
+        const ema50  = padEMA(EMA.calculate({ period: 50, values: closes }), 50);
+        const ema200 = padEMA(EMA.calculate({ period:200, values: closes }),200);
 
-        // iterate bars
-        for (let i = 0; i < closes.length; i++) {
-          const date = dates[i];
-          const close= closes[i];
-          const e100 = ema100[i];
-          const e200 = ema200[i];
-          const signal = (e100 !== null && e200 !== null && close > e100 && close > e200) ? 1 : 0;
+        for (let i=0; i<closes.length; i++){
+          const d = dates[i];
+          breadth[d] = breadth[d] || { pos:0, neg:0 };
 
-          // record per-symbol row
-          perSymbolRows.push({
+          const ok = closes[i]>ema50[i] && closes[i]>ema200[i];
+          breadth[d][ ok? 'pos':'neg' ]++;
+
+          rowsSym.push({
             symbol: sym,
-            date,
-            close,
-            ema100: e100,
-            ema200: e200,
-            signal
+            date:   d,
+            close:  closes[i],
+            ema50:  ema50[i],
+            ema200: ema200[i],
+            signal: ok? 1:0
           });
-
-          // update breadth only once both EMAs exist
-          if (e200 !== null) {
-            breadth[date] = breadth[date] || { pos: 0, neg: 0 };
-            if (close > e100 && close > e200) breadth[date].pos++;
-            else breadth[date].neg++;
-          }
         }
       } catch (err) {
         console.error(`⚠️  ${sym} → ${err.message}`);
@@ -135,48 +109,46 @@ function padEMA(arr, period, fullLen) {
     })
   ));
 
-  // 4) Write breadth % CSV
-  const dates = Object.keys(breadth).sort();
-  const breadthRecords = dates.map(d => {
-    const { pos, neg } = breadth[d];
-    const total = pos + neg;
-    return {
-      date:   d,
-      positive: pos,
-      negative: neg,
-      pos_pct:  (pos  / total * 100).toFixed(2),
-      neg_pct:  (neg  / total * 100).toFixed(2),
-    };
-  });
-
+  // write breadth
+  const days = Object.keys(breadth).sort();
   await createObjectCsvWriter({
-    path: 'ema_breadth.csv',
+    path: 'data/ema_breadth.csv',
     header: [
-      { id:'date',      title:'date' },
-      { id:'positive',  title:'positive' },
-      { id:'negative',  title:'negative' },
-      { id:'pos_pct',   title:'pos_pct' },
-      { id:'neg_pct',   title:'neg_pct' }
+      { id:'date', title:'date' },
+      { id:'positive', title:'positive' },
+      { id:'negative', title:'negative' },
+      { id:'pos_pct', title:'pos_pct' },
+      { id:'neg_pct', title:'neg_pct' }
     ]
-  }).writeRecords(breadthRecords);
-  console.log(`💾  Saved breadth → ema_breadth.csv  (${breadthRecords.length} rows)`);
+  }).writeRecords(
+    days.map(d => {
+      const { pos, neg } = breadth[d];
+      const tot = pos+neg;
+      return {
+        date: d,
+        positive: pos,
+        negative: neg,
+        pos_pct: (pos/tot*100).toFixed(2),
+        neg_pct: (neg/tot*100).toFixed(2)
+      };
+    })
+  );
 
-  // 5) Write per-symbol CSV
+  console.log(`💾  data/ema_breadth.csv (${days.length} rows)`);
+
+  // write per-symbol
   await createObjectCsvWriter({
-    path: 'ema_values.csv',
+    path: 'data/ema_values.csv',
     header: [
       { id:'symbol', title:'symbol' },
       { id:'date',   title:'date' },
       { id:'close',  title:'close' },
-      { id:'ema100', title:'ema100' },
+      { id:'ema50',  title:'ema50' },
       { id:'ema200', title:'ema200' },
-      { id:'signal', title:'signal' },
+      { id:'signal', title:'signal' }
     ]
-  }).writeRecords(perSymbolRows);
-  console.log(`💾  Saved per-symbol → ema_values.csv  (${perSymbolRows.length} rows)`);
+  }).writeRecords(rowsSym);
 
-  console.timeEnd('TOTAL');
-})().catch(err => {
-  console.error('❌ Fatal error:', err);
-  process.exit(1);
-});
+  console.log(`💾  data/ema_values.csv (${rowsSym.length} rows)`);
+  console.timeEnd('TOTAL-FINAL');
+})();
