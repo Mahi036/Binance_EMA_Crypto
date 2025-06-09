@@ -59,7 +59,10 @@ async function fetchKlines(symbol) {
     limit:    String(LIMIT_ROWS),
   }).toString();
   const data = await httpGetJson(`/api/v3/klines?${qs}`);
-
+      if (!Array.isArray(data)) {
+      console.warn(`⚠️  ${symbol}: unexpected proxy response, skipping`, data);
+      return [];
+    }
   // map & filter out anything before START_DATE
   const cutoff = Date.parse(`${START_DATE}T00:00:00Z`);
   return data

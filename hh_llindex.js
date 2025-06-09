@@ -64,7 +64,10 @@ async function fetchDailyKlines(symbol) {
 
   const data = await httpGetJson(`/api/v3/klines?${qs}`);
   const cutoff = Date.parse(`${START_DATE}T00:00:00Z`);
-
+  if (!Array.isArray(data)) {
+    console.warn(`⚠️  ${symbol}: unexpected proxy response, skipping`, data);
+   return { hh_flags: {}, ll_flags: {} };
+  }
   return data
     .map(k => ({
       date:  dayjs(k[0]).format('YYYY-MM-DD'),

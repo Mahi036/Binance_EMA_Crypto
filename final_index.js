@@ -70,6 +70,10 @@ function padEMA(arr, period, fullLen) {
 
   // 1) Build your universe of symbols
   const exInfoResp = await axios.get(`${BASE_URL}/api/v3/exchangeInfo`);
+  if (!Array.isArray(data)) {
+    console.warn(`⚠️  ${symbol}: unexpected proxy response, skipping`, data);
+    return [];  // or however you bail in this function
+  }
   const symbols = exInfoResp.data.symbols
     .filter(s => s.status === 'TRADING'
               && s.isSpotTradingAllowed
