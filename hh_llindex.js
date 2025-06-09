@@ -17,7 +17,7 @@ process.env.NO_PROXY    = 'localhost,127.0.0.1';
 
 const http   = require('http');
 const { URLSearchParams } = require('url');
-const pLimit = require('p-limit').default;
+// const pLimit = require('p-limit').default;
 const dayjs  = require('dayjs');
 const { createObjectCsvWriter } = require('csv-writer');
 
@@ -100,6 +100,8 @@ async function flagHHLLforSymbol(symbol) {
 // ─── MAIN ───────────────────────────────────────────────────────
 (async () => {
   console.log(`Fetching bars since ${START_DATE}, flagging from ${ANALYSIS_START}`);
+
+  const { default: pLimit } = await import('p-limit');
 
   // 1) load symbols
   const exInfo = await httpGetJson('/api/v3/exchangeInfo');

@@ -15,7 +15,7 @@ process.env.NO_PROXY    = 'localhost,127.0.0.1';
 // ── 2) Imports ─────────────────────────────────────────────────
 const http   = require('http');
 const { URLSearchParams } = require('url');
-const pLimit = require('p-limit').default;
+// const pLimit = require('p-limit').default;
 const dayjs  = require('dayjs');
 const { EMA } = require('technicalindicators');
 const { createObjectCsvWriter } = require('csv-writer');
@@ -73,6 +73,8 @@ const padEMA = (arr, period) => Array(period - 1).fill(null).concat(arr);
 // ── 6) Main ─────────────────────────────────────────────────────
 ;(async () => {
   console.time('TOTAL');
+
+  const { default: pLimit } = await import('p-limit');
 
   // A) Load symbols via exchangeInfo
   const ex     = await httpGetJson('/api/v3/exchangeInfo');

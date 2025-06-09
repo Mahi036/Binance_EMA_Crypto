@@ -15,7 +15,7 @@ process.env.NO_PROXY    = 'localhost,127.0.0.1';
 
 const axios         = require('axios');
 axios.defaults.proxy = false;                   // disable axios proxy
-const pLimit        = require('p-limit').default;
+// const pLimit        = require('p-limit').default;
 const dayjs         = require('dayjs');
 const { EMA }       = require('technicalindicators');
 const { createObjectCsvWriter } = require('csv-writer');
@@ -65,6 +65,8 @@ function padEMA(arr, period, fullLen) {
 // ------------------------------------------------------------------
 ;(async () => {
   console.time('TOTAL');
+
+  const { default: pLimit } = await import('p-limit');
 
   // 1) Build your universe of symbols
   const exInfoResp = await axios.get(`${BASE_URL}/api/v3/exchangeInfo`);
