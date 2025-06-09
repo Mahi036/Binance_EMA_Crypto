@@ -4,8 +4,8 @@ on:
   push:
     branches: [ main ]
   schedule:
-    - cron: '0 0 * * *'    # every UTC midnight
-  workflow_dispatch:      # enables manual “Run workflow” button
+    - cron: '0 0 * * *'      # every UTC midnight
+  workflow_dispatch:        # allow manual runs from the Actions tab
 
 jobs:
   update_csvs:
@@ -13,58 +13,52 @@ jobs:
 
     steps:
       # 1) Check out your repo
-      - name: Check out repo
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      # 2) Install Go (to build the proxy)
-      - name: Set up Go
-        uses: actions/setup-go@v4
-        with:
-          go-version: '1.24'
-
-      # 3) Clone & build binance-proxy
-      - name: Build binance-proxy
+      # 2) Pull & run the official Docker image of binance-proxy
+      - name: Launch binance-proxy in Docker
         run: |
-          git clone https://github.com/nightshift2k/binance-proxy.git
-          cd binance-proxy/cmd/binance-proxy
-          go build -o $GITHUB_WORKSPACE/binance-proxy
+          docker pull nightshift2k/binance-proxy:latest
+          docker run --name binance-proxy -d -p 8090:8090 nightshift2k/binance-proxy:latest
 
-      # 4) Launch the proxy in the background
-      - name: Start binance-proxy
+      # 3) Wait up to 30s for it to start answering on localhost:8090
+      - name: Wait for proxy to be ready
         run: |
-          nohup $GITHUB_WORKSPACE/binance-proxy &
-          # wait a few seconds for it to bind on :8090
-          sleep 5
+          for i in $(seq 1 10); do
+            if curl --silent --fail http://127.0.0.1:8090/api/v3/exchangeInfo; then
+              echo "✅ proxy is up!"
+              break
+            else
+              echo "⏱ waiting for proxy… ($i/10)"
+              sleep 3
+            fi
+          done
 
-      # 5) **Really** check the proxy is listening on 127.0.0.1:8090
-      - name: Check proxy is up
-        run: |
-          curl --fail http://127.0.0.1:8090/api/v3/exchangeInfo \
-            || (echo "🚨 Binance-proxy didn't start!" && exit 1)
-
-      # 6) Install Node.js & your scripts' deps
-      - name: Set up Node.js
+      # 4) Set up Node.js
+      - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: 18
 
+      # 5) Install your JS dependencies
       - name: Install dependencies
         run: npm ci --omit=dev
 
-      # 7) Run your 3 data-gen scripts
-      - name: Run breadth & HH-LL scripts
+      # 6) Run your three data-generation scripts
+      - name: Generate CSVs
         run: |
           node pct_index.js
           node hh_llindex.js
           node final_index.js
 
-      # 8) Commit & push the updated CSVs back to data/
-      - name: Commit & push updated CSVs
+      # 7) Commit & push the newly generated CSVs back into data/
+      - name: Commit & push results
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "actions@github.com"
           git add data/*.csv
-          git commit -m "📈 Update breadth & HH-LL CSVs $(date -u +'%Y-%m-%d')"
+          git diff --quiet --exit-code || git commit -m "📈 Update breadth & HH-LL CSVs $(date -u +'%Y-%m-%d')"
           git push
