@@ -1,8 +1,13 @@
 name: Update breadth data
 
 on:
+  push:
+    branches:
+      - main                # run on every push
   schedule:
-    - cron: '0 0 * * *'    # every day at 00:00 UTC
+    - cron: '0 0 * * *'     # run nightly at 00:00 UTC
+  workflow_dispatch:       # enables the “Run workflow” button
+
 
 jobs:
   update_csvs:
