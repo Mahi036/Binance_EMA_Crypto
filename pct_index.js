@@ -21,7 +21,7 @@ const { EMA } = require('technicalindicators');
 const { createObjectCsvWriter } = require('csv-writer');
 
 // ── 3) Config ──────────────────────────────────────────────────
-const HOST        = 'localhost';
+const HOST        = '127.0.0.1';
 const PORT        = 8090;
 const INTERVAL    = '1d';
 const START_DATE  = '2023-06-01';   // ≥200d before 2024-01-01

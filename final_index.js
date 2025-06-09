@@ -23,7 +23,7 @@ const { createObjectCsvWriter } = require('csv-writer');
 // ------------------------------------------------------------------
 // Settings
 // ------------------------------------------------------------------
-const BASE_URL      = 'http://localhost:8090';
+const BASE_URL = 'http://127.0.0.1:8090';
 console.log("→ Using BASE_URL =", BASE_URL);
 
 const QUOTE_FILTER  = 'USDT';

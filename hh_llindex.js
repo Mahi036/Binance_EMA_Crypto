@@ -22,7 +22,7 @@ const dayjs  = require('dayjs');
 const { createObjectCsvWriter } = require('csv-writer');
 
 // ─── CONFIG ────────────────────────────────────────────────────
-const HOST           = 'localhost';
+const HOST        = '127.0.0.1';
 const PORT           = 8090;
 const INTERVAL       = '1d';
 const LOOKBACK_DAYS  = 90;
